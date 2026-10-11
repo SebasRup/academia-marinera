@@ -33,7 +33,7 @@ console.warn = (...args) => {
   warnOriginal(...args);
 };
 
-const API_URL = 'http://192.168.1.30:3000';
+const API_URL = 'https://academia-marinera.onrender.com';
 
 const formatearFechaPeruana = (fechaStr, incluirDiaSemana = true) => {
   if (!fechaStr) return '';

@@ -230,6 +230,23 @@ function App() {
     }
   });
 
+  // Estado del Sidebar colapsable (recuerda su preferencia en iPad o PC)
+  const [sidebarColapsado, setSidebarColapsado] = useState(() => {
+    try {
+      return localStorage.getItem('sidebar_colapsado_academia') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const alternarSidebar = () => {
+    setSidebarColapsado(prev => {
+      const nuevo = !prev;
+      localStorage.setItem('sidebar_colapsado_academia', String(nuevo));
+      return nuevo;
+    });
+  };
+
   const cambiarModoVisual = (nuevoModo) => {
     setModoVisual(nuevoModo);
     localStorage.setItem('modo_visual_academia', nuevoModo);
@@ -439,7 +456,6 @@ function App() {
     notificar('Reporte Excel (.csv) descargado con éxito');
   };
 
-  // BOTÓN: LIMPIAR HISTORIAL DE PAGOS (CIERRE DE MES)
   const vaciarHistorialPagos = async () => {
     const seguro = window.confirm(
       '⚠️ ¿Estás completamente seguro de vaciar el historial de pagos?\n\n' +
@@ -462,7 +478,6 @@ function App() {
     }
   };
 
-  // BOTÓN: VACIAR BITÁCORA DE AUDITORÍA
   const vaciarHistorialAuditoria = async () => {
     const seguro = window.confirm(
       '⚠️ ¿Deseas vaciar la bitácora de auditoría?\n\n' +
@@ -642,7 +657,6 @@ Tu clase de marinera ha sido agendada con éxito:
     }
   };
 
-  // REGISTRAR PAGO EN COUNTER (SIN WSP Y SOLO YAPE, PLIN, EFECTIVO)
   const registrarNuevoPago = async (e) => {
     e.preventDefault();
     if (!modalPago.id_alumno) {
@@ -794,7 +808,6 @@ Tu clase de marinera ha sido agendada con éxito:
     return coincideTexto && coincideChip;
   });
 
-  // FILTRO SOLO CON EFECTIVO Y DIGITALES (YAPE / PLIN)
   const pagosFiltrados = pagos.filter(p => {
     const txt = busqueda.toLowerCase();
     const alumno = `${p.alumno_nombre || ''} ${p.alumno_apellido || ''}`.toLowerCase();
@@ -1012,30 +1025,78 @@ Tu clase de marinera ha sido agendada con éxito:
         </div>
       )}
 
-      {/* SIDEBAR LATERAL */}
+      {/* SIDEBAR LATERAL COLAPSABLE */}
       <aside style={{
-        width: '260px',
+        width: sidebarColapsado ? '72px' : '260px',
         backgroundColor: '#0f172a',
         color: '#f8fafc',
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'space-between',
-        padding: '24px 18px',
-        flexShrink: 0
+        padding: sidebarColapsado ? '20px 8px' : '24px 18px',
+        flexShrink: 0,
+        transition: 'all 0.25s ease',
+        boxSizing: 'border-box'
       }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingBottom: '22px', borderBottom: '1px solid #1e293b', marginBottom: '22px' }}>
-            <div style={{ width: '38px', height: '38px', borderRadius: '10px', backgroundColor: enModoAdmin ? '#0284c7' : '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px' }}>
-              {enModoAdmin ? '💃' : '👟'}
-            </div>
-            <div>
-              <div style={{ fontWeight: '900', fontSize: '15px', letterSpacing: '-0.02em', color: '#ffffff' }}>ACADEMIA PRO</div>
-              <div style={{ fontSize: '11px', color: enModoAdmin ? '#38bdf8' : '#86efac', fontWeight: '800', letterSpacing: '0.5px' }}>
-                {enModoAdmin ? 'MODO ADMINISTRADOR' : 'MODO PISTA / PROFESOR'}
+          {/* Cabecera del Sidebar con botón de colapso */}
+          <div style={{
+            display: 'flex',
+            flexDirection: sidebarColapsado ? 'column' : 'row',
+            alignItems: 'center',
+            justifyContent: sidebarColapsado ? 'center' : 'space-between',
+            paddingBottom: '20px',
+            borderBottom: '1px solid #1e293b',
+            marginBottom: '20px',
+            gap: sidebarColapsado ? '12px' : '10px'
+          }}>
+            {!sidebarColapsado ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden' }}>
+                <div style={{ width: '38px', height: '38px', borderRadius: '10px', backgroundColor: enModoAdmin ? '#0284c7' : '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}>
+                  {enModoAdmin ? '💃' : '👟'}
+                </div>
+                <div>
+                  <div style={{ fontWeight: '900', fontSize: '15px', letterSpacing: '-0.02em', color: '#ffffff', whiteSpace: 'nowrap' }}>ACADEMIA PRO</div>
+                  <div style={{ fontSize: '11px', color: enModoAdmin ? '#38bdf8' : '#86efac', fontWeight: '800', letterSpacing: '0.5px', whiteSpace: 'nowrap' }}>
+                    {enModoAdmin ? 'MODO ADMIN' : 'MODO PISTA'}
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div
+                style={{ width: '38px', height: '38px', borderRadius: '10px', backgroundColor: enModoAdmin ? '#0284c7' : '#16a34a', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '18px', flexShrink: 0 }}
+                title={enModoAdmin ? 'Academia Pro (Admin)' : 'Academia Pro (Pista)'}
+              >
+                {enModoAdmin ? '💃' : '👟'}
+              </div>
+            )}
+
+            {/* BOTÓN COLAPSAR / EXPANDIR SIDEBAR */}
+            <button
+              type="button"
+              onClick={alternarSidebar}
+              title={sidebarColapsado ? "Expandir menú lateral" : "Minimizar menú lateral"}
+              style={{
+                backgroundColor: 'rgba(255, 255, 255, 0.1)',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                color: '#ffffff',
+                borderRadius: '8px',
+                padding: '6px 8px',
+                cursor: 'pointer',
+                fontSize: '11px',
+                fontWeight: '900',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                transition: 'background-color 0.2s ease'
+              }}
+            >
+              {sidebarColapsado ? '▶' : '◀'}
+            </button>
           </div>
 
+          {/* Menú de Navegación */}
           <nav style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {[
               { id: 'horarios', label: enModoProfesor ? 'Mis Clases Asignadas' : 'Calendario de Clases', icon: '📅', visible: true },
@@ -1049,11 +1110,13 @@ Tu clase de marinera ha sido agendada con éxito:
                 <button
                   key={item.id}
                   onClick={() => { setTabActual(item.id); setBusqueda(''); }}
+                  title={sidebarColapsado ? item.label : ''}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
+                    justifyContent: sidebarColapsado ? 'center' : 'flex-start',
                     gap: '12px',
-                    padding: '12px 14px',
+                    padding: sidebarColapsado ? '12px 0' : '12px 14px',
                     borderRadius: '10px',
                     border: 'none',
                     cursor: 'pointer',
@@ -1062,35 +1125,53 @@ Tu clase de marinera ha sido agendada con éxito:
                     backgroundColor: activo ? (enModoAdmin ? '#0284c7' : '#16a34a') : 'transparent',
                     color: activo ? '#ffffff' : '#94a3b8',
                     textAlign: 'left',
-                    transition: 'all 0.15s ease'
+                    transition: 'all 0.15s ease',
+                    width: '100%'
                   }}
                 >
-                  <span style={{ fontSize: '16px' }}>{item.icon}</span>
-                  <span>{item.label}</span>
+                  <span style={{ fontSize: '18px', flexShrink: 0 }}>{item.icon}</span>
+                  {!sidebarColapsado && <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.label}</span>}
                 </button>
               );
             })}
           </nav>
         </div>
 
-        <div style={{ backgroundColor: '#1e293b', padding: '14px', borderRadius: '12px', border: '1px solid #334155' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: '700', color: '#34d399' }}>
-            <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#34d399' }}></span>
-            Servidor En Línea
+        {/* Estado del Servidor */}
+        <div style={{
+          backgroundColor: '#1e293b',
+          padding: sidebarColapsado ? '12px 6px' : '14px',
+          borderRadius: '12px',
+          border: '1px solid #334155',
+          textAlign: sidebarColapsado ? 'center' : 'left'
+        }}>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: sidebarColapsado ? 'center' : 'flex-start',
+            gap: '8px',
+            fontSize: '12px',
+            fontWeight: '700',
+            color: '#34d399'
+          }}>
+            <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#34d399', flexShrink: 0 }}></span>
+            {!sidebarColapsado && <span>Servidor En Línea</span>}
           </div>
-          <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
-            {enModoAdmin ? 'Control Global y Financiero' : 'Vista Rápida para Ensayos'}
-          </div>
+          {!sidebarColapsado && (
+            <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
+              {enModoAdmin ? 'Control Global y Financiero' : 'Vista Rápida para Ensayos'}
+            </div>
+          )}
         </div>
       </aside>
 
       {/* ÁREA PRINCIPAL */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, transition: 'all 0.25s ease' }}>
         
         {/* TOPBAR */}
         <header style={{
           backgroundColor: '#ffffff',
-          padding: '14px 32px',
+          padding: '14px 28px',
           borderBottom: '1px solid #e2e8f0',
           display: 'flex',
           justifyContent: 'space-between',
@@ -1214,8 +1295,8 @@ Tu clase de marinera ha sido agendada con éxito:
           </div>
         </header>
 
-        {/* CONTENIDO */}
-        <main style={{ flex: 1, padding: '28px 32px', overflowY: 'auto' }}>
+        {/* CONTENIDO PRINCIPAL */}
+        <main style={{ flex: 1, padding: '24px 28px', overflowY: 'auto' }}>
           
           <div style={{ marginBottom: '22px' }}>
             <h1 style={{ fontSize: '24px', fontWeight: '900', letterSpacing: '-0.02em', color: '#0f172a', margin: '0 0 4px 0' }}>
@@ -1236,7 +1317,7 @@ Tu clase de marinera ha sido agendada con éxito:
 
           {/* TARJETAS DE MÉTRICAS */}
           {tabActual !== 'pagos' && tabActual !== 'auditoria' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '14px', marginBottom: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '24px' }}>
               {[
                 { label: 'Alumnos Activos', valor: totalAlumnos, nota: 'Padrón oficial', color: '#0284c7', bg: '#f0f9ff', icon: '👥' },
                 { label: 'Clases con Cupo', valor: clasesDisponibles, nota: enModoProfesor ? 'Tus turnos libres' : 'Abiertas en App', color: '#16a34a', bg: '#f0fdf4', icon: '📅' },
@@ -1287,8 +1368,8 @@ Tu clase de marinera ha sido agendada con éxito:
                   <form onSubmit={guardarHorario} style={{
                     display: 'grid',
                     gridTemplateColumns: formHorario.modalidad === 'Grupal' 
-                      ? 'repeat(3, minmax(160px, 1fr)) 110px minmax(150px, 1fr) 150px' 
-                      : 'repeat(4, minmax(170px, 1fr)) 150px',
+                      ? 'repeat(auto-fit, minmax(150px, 1fr))' 
+                      : 'repeat(auto-fit, minmax(160px, 1fr))',
                     gap: '12px',
                     alignItems: 'flex-end'
                   }}>
@@ -1322,7 +1403,7 @@ Tu clase de marinera ha sido agendada con éxito:
                           max="60"
                           required
                           value={formHorario.capacidad_max}
-                          onChange={(e) => setFormHorario({ ...formHorario, capacity_max: e.target.value })}
+                          onChange={(e) => setFormHorario({ ...formHorario, capacidad_max: e.target.value })}
                           style={{ ...inputStyle, width: '100%', fontWeight: '800', textAlign: 'center' }}
                         />
                       </div>
@@ -1715,7 +1796,7 @@ Te recordamos tu ensayo de marinera programado para hoy:
 
           {/* VISTA 3: USUARIOS */}
           {tabActual === 'usuarios' && enModoAdmin && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 340px) 1fr', gap: '24px', alignItems: 'start' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px', alignItems: 'start' }}>
               <div style={{ backgroundColor: '#ffffff', padding: '22px', borderRadius: '14px', border: '1px solid #e2e8f0' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
                   <span style={{ fontSize: '16px' }}>👤</span>
@@ -1883,7 +1964,7 @@ Te recordamos tu ensayo de marinera programado para hoy:
             </div>
           )}
 
-          {/* VISTA 4: ABONOS Y FINANZAS (SOLO YAPE, PLIN Y EFECTIVO) */}
+          {/* VISTA 4: ABONOS Y FINANZAS */}
           {tabActual === 'pagos' && enModoAdmin && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '22px' }}>
               <div>
@@ -1891,7 +1972,7 @@ Te recordamos tu ensayo de marinera programado para hoy:
                   📈 Resumen Financiero y Recaudación
                 </h3>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '14px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '16px', marginBottom: '14px' }}>
                   <div style={{ backgroundColor: '#ffffff', borderRadius: '14px', padding: '18px 20px', border: '1px solid #e2e8f0', boxShadow: '0 2px 6px rgba(15, 23, 42, 0.02)' }}>
                     <div style={{ fontSize: '11px', fontWeight: '800', color: '#16a34a', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Ingresos de Hoy</div>
                     <div style={{ fontSize: '26px', fontWeight: '900', color: '#15803d', marginTop: '4px' }}>S/ {ingresosHoy.toFixed(2)}</div>
@@ -2011,7 +2092,6 @@ Te recordamos tu ensayo de marinera programado para hoy:
                       <span>📊</span> Exportar Excel (.csv)
                     </button>
 
-                    {/* BOTÓN LIMPIAR MES */}
                     <button
                       onClick={vaciarHistorialPagos}
                       style={{
@@ -2180,7 +2260,7 @@ Te confirmamos la recepción de tu pago:
             </div>
           )}
 
-          {/* VISTA 5: AUDITORÍA Y BITÁCORA */}
+          {/* VISTA 5: AUDITORÍA */}
           {tabActual === 'auditoria' && enModoAdmin && (
             <div style={{ backgroundColor: '#ffffff', borderRadius: '14px', border: '1px solid #e2e8f0', overflow: 'hidden' }}>
               <div style={{ padding: '16px 22px', borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
@@ -2390,7 +2470,7 @@ Te confirmamos la recepción de tu pago:
         </div>
       )}
 
-      {/* MODAL 2: REGISTRAR PAGO COUNTER (SIN WSP Y SOLO YAPE, PLIN, EFECTIVO) */}
+      {/* MODAL 2: REGISTRAR PAGO */}
       {modalPago.visible && (
         <div style={{
           position: 'fixed',
@@ -2700,7 +2780,7 @@ Te confirmamos la recepción de tu pago:
                   </table>
                 </div>
 
-                <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: '800', color: '#334155' }}>
+                <h4 style={{ margin: '14px 0 8px 0', fontSize: '13px', fontWeight: '800', color: '#334155' }}>
                   💳 Historial de Pagos y Abonos ({misPagos.length})
                 </h4>
 

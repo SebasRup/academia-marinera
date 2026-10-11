@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-const API_URL = `http://${window.location.hostname}:3000`;
+const API_URL = 'https://academia-marinera.onrender.com';
 
 const BLOQUES_HORARIOS = (() => {
   const bloques = [];

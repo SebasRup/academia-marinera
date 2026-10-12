@@ -2,6 +2,8 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 html, body, #root {
@@ -10,4 +12,10 @@ html, body, #root {
   margin: 0;
   padding: 0;
   background-color: #f8fafc;
+  touch-action: manipulation;
+}
+
+button, [role="button"], input, select, a {
+  touch-action: manipulation;
+  cursor: pointer;
 }

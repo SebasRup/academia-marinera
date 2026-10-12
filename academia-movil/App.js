@@ -263,7 +263,6 @@ export default function App() {
 
         const fechaFormateada = formatearFechaPeruana(claseSeleccionada.fecha);
 
-        // ALERTA SIN PRECIO
         Alert.alert(
           '¡Cupo Asegurado! 💃',
           `Clase agendada para el ${fechaFormateada}.\n\n¿Deseas pagar tu clase ahora?`,
@@ -324,7 +323,7 @@ export default function App() {
     }
 
     if (metodoPago === 'Yape' && !fotoVoucherBase64) {
-      Alert.alert('Voucher requerido', 'Por favor selecciona la foto de la constancia de Yape.');
+      Alert.alert('Voucher requerido', 'Por favor selecciona la foto de la constancia de Yape o Plin.');
       return;
     }
 
@@ -720,7 +719,7 @@ export default function App() {
         )
       )}
 
-      {/* MODAL DE PAGO: SIN PRECIO VISIBLE */}
+      {/* MODAL DE PAGO: CON SELECTOR YAPE / PLIN */}
       <Modal
         visible={modalPagoVisible}
         animationType="slide"
@@ -741,7 +740,7 @@ export default function App() {
                 style={[styles.tabPagoBoton, metodoPago === 'Yape' && styles.tabPagoBotonActivo]}
                 onPress={() => { setMetodoPago('Yape'); setFotoVoucherUri(null); setFotoVoucherBase64(null); }}
               >
-                <Text style={[styles.tabPagoTexto, metodoPago === 'Yape' && styles.tabPagoTextoActivo]}>📱 Yape</Text>
+                <Text style={[styles.tabPagoTexto, metodoPago === 'Yape' && styles.tabPagoTextoActivo]}>📱 Yape / Plin</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -756,24 +755,24 @@ export default function App() {
               {metodoPago === 'Yape' ? (
                 <View style={styles.pagoBoxYape}>
                   <View style={styles.yapeHeaderRow}>
-                    <Text style={styles.yapeBadge}>NÚMERO YAPE OFICIAL</Text>
+                    <Text style={styles.yapeBadge}>NÚMERO YAPE / PLIN OFICIAL</Text>
                   </View>
 
                   <View style={styles.datoPagoRowConBoton}>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.datoPagoLabel}>📱 Número para Yapear:</Text>
+                      <Text style={styles.datoPagoLabel}>📱 Número para Yape / Plin:</Text>
                       <Text selectable={true} style={styles.datoPagoValorGrande}>989406581</Text>
                     </View>
                     <TouchableOpacity 
                       style={styles.botonCopiar}
-                      onPress={() => copiarAlPortapapeles('989406581', 'Número de Yape')}
+                      onPress={() => copiarAlPortapapeles('989406581', 'Número de Yape / Plin')}
                     >
                       <Text style={styles.botonCopiarTexto}>📋 Copiar</Text>
                     </TouchableOpacity>
                   </View>
 
                   <View style={styles.adjuntarSection}>
-                    <Text style={styles.adjuntarTitulo}>Adjuntar Captura del Yape:</Text>
+                    <Text style={styles.adjuntarTitulo}>Adjuntar Captura de Yape o Plin:</Text>
                     {fotoVoucherUri ? (
                       <View style={styles.previewContainer}>
                         <Image source={{ uri: fotoVoucherUri }} style={styles.previewImagen} />

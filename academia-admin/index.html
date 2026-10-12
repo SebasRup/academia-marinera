@@ -3,14 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    
+    <!-- viewport-fit=cover extiende el fondo hasta el borde del iPad sin franjas -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Academia Pro</title>
 
-    <!-- Habilitar modo pantalla completa en iPad y iPhone (sin barra de Safari) -->
+    <!-- Color oscuro para fundir la barra superior con el fondo de la app -->
+    <meta name="theme-color" content="#0f172a" />
+
+    <!-- Configuración PWA pantalla completa para iPad y iPhone -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Academia Pro" />
     <meta name="mobile-web-app-capable" content="yes" />
+    
+    <style>
+      /* Evita cualquier rebote o fondo blanco del navegador */
+      html, body {
+        background-color: #0f172a;
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow-x: hidden;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

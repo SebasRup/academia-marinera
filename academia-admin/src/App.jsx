@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 
 const API_URL = 'https://academia-marinera.onrender.com';
 
@@ -230,7 +230,6 @@ function App() {
     }
   });
 
-  // Estado del Sidebar colapsable (recuerda su preferencia en iPad o PC)
   const [sidebarColapsado, setSidebarColapsado] = useState(() => {
     try {
       return localStorage.getItem('sidebar_colapsado_academia') === 'true';
@@ -266,6 +265,13 @@ function App() {
   const [reservas, setReservas] = useState([]);
   const [auditorias, setAuditorias] = useState([]);
   const [busqueda, setBusqueda] = useState('');
+  const [sincronizando, setSincronizando] = useState(false);
+
+  // Candados para evitar dobles toques en iPad
+  const [guardandoHorario, setGuardandoHorario] = useState(false);
+  const [guardandoPago, setGuardandoPago] = useState(false);
+  const [guardandoUsuario, setGuardandoUsuario] = useState(false);
+  const [guardandoInscripcion, setGuardandoInscripcion] = useState(false);
 
   const [filtroEstadoHorario, setFiltroEstadoHorario] = useState('todos');
   const [filtroPeriodoHorario, setFiltroPeriodoHorario] = useState('todos');
@@ -299,38 +305,65 @@ function App() {
     ? `${usuarioLogueado.nombre} ${usuarioLogueado.apellido} (${usuarioLogueado.rol})`
     : 'Administrador';
 
-  const cargarDatos = () => {
-    fetch(`${API_URL}/api/usuarios`)
-      .then(res => res.json())
-      .then(data => setUsuarios(Array.isArray(data) ? data : []))
-      .catch(err => console.error(err));
+  // Función anticaché que fuerza a Safari en iPad a traer siempre los datos más recientes
+  const cargarDatos = useCallback(async (mostrarIndicador = false) => {
+    if (mostrarIndicador) setSincronizando(true);
+    const ts = Date.now();
+    const opcionesFetch = { cache: 'no-store' };
 
-    fetch(`${API_URL}/api/horarios`)
-      .then(res => res.json())
-      .then(data => setHorarios(Array.isArray(data) ? data : []))
-      .catch(err => console.error(err));
+    try {
+      const [resU, resH, resP, resR, resA] = await Promise.allSettled([
+        fetch(`${API_URL}/api/usuarios?t=${ts}`, opcionesFetch).then(r => r.json()),
+        fetch(`${API_URL}/api/horarios?t=${ts}`, opcionesFetch).then(r => r.json()),
+        fetch(`${API_URL}/api/pagos?t=${ts}`, opcionesFetch).then(r => r.json()),
+        fetch(`${API_URL}/api/reservas?t=${ts}`, opcionesFetch).then(r => r.json()),
+        fetch(`${API_URL}/api/auditoria?t=${ts}`, opcionesFetch).then(r => r.json()),
+      ]);
 
-    fetch(`${API_URL}/api/pagos`)
-      .then(res => res.json())
-      .then(data => setPagos(Array.isArray(data) ? data : []))
-      .catch(err => console.error(err));
-
-    fetch(`${API_URL}/api/reservas`)
-      .then(res => res.json())
-      .then(data => setReservas(Array.isArray(data) ? data : []))
-      .catch(err => console.error(err));
-
-    fetch(`${API_URL}/api/auditoria`)
-      .then(res => res.json())
-      .then(data => setAuditorias(Array.isArray(data) ? data : []))
-      .catch(err => console.error(err));
-  };
-
-  useEffect(() => {
-    if (usuarioLogueado) {
-      cargarDatos();
+      if (resU.status === 'fulfilled' && Array.isArray(resU.value)) setUsuarios(resU.value);
+      if (resH.status === 'fulfilled' && Array.isArray(resH.value)) setHorarios(resH.value);
+      if (resP.status === 'fulfilled' && Array.isArray(resP.value)) setPagos(resP.value);
+      if (resR.status === 'fulfilled' && Array.isArray(resR.value)) setReservas(resR.value);
+      if (resA.status === 'fulfilled' && Array.isArray(resA.value)) setAuditorias(resA.value);
+    } catch (err) {
+      console.error('Error sincronizando:', err);
+    } finally {
+      if (mostrarIndicador) setSincronizando(false);
     }
-  }, [usuarioLogueado]);
+  }, []);
+
+  // Carga inicial + auto-sincronización cada 15s + actualización al volver de WhatsApp
+  useEffect(() => {
+    if (!usuarioLogueado) return;
+
+    cargarDatos();
+
+    const intervalo = setInterval(() => {
+      cargarDatos(false);
+    }, 15000);
+
+    const alRecuperarFoco = () => {
+      if (document.visibilityState === 'visible') {
+        cargarDatos(false);
+      }
+    };
+
+    window.addEventListener('focus', alRecuperarFoco);
+    document.addEventListener('visibilitychange', alRecuperarFoco);
+
+    return () => {
+      clearInterval(intervalo);
+      window.removeEventListener('focus', alRecuperarFoco);
+      document.removeEventListener('visibilitychange', alRecuperarFoco);
+    };
+  }, [usuarioLogueado, cargarDatos]);
+
+  // Recargar automáticamente al cambiar de pestaña en el menú lateral
+  const cambiarTab = (nuevoTab) => {
+    setTabActual(nuevoTab);
+    setBusqueda('');
+    cargarDatos(false);
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -350,8 +383,10 @@ function App() {
         localStorage.setItem('sesion_academia', JSON.stringify(data.usuario));
         if (data.usuario.rol === 'Profesor') {
           setModoVisual('profesor');
+          localStorage.setItem('modo_visual_academia', 'profesor');
         } else {
           setModoVisual('admin');
+          localStorage.setItem('modo_visual_academia', 'admin');
         }
         setTabActual('horarios');
       } else {
@@ -468,7 +503,8 @@ function App() {
         method: 'DELETE'
       });
       if (res.ok) {
-        cargarDatos();
+        setPagos([]);
+        await cargarDatos();
         notificar('Historial de finanzas limpiado con éxito');
       } else {
         notificar('No se pudo vaciar el historial', 'error');
@@ -490,7 +526,8 @@ function App() {
         method: 'DELETE'
       });
       if (res.ok) {
-        cargarDatos();
+        setAuditorias([]);
+        await cargarDatos();
         notificar('Bitácora de eventos vaciada');
       } else {
         notificar('No se pudo vaciar la auditoría', 'error');
@@ -500,44 +537,71 @@ function App() {
     }
   };
 
-  const alternarEstadoUsuario = (usuario) => {
+  const alternarEstadoUsuario = async (usuario) => {
     const nuevoEstado = !usuario.estado;
-    fetch(`${API_URL}/api/usuarios/${usuario.id_usuario}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        rol: usuario.rol,
-        nombre: usuario.nombre,
-        apellido: usuario.apellido,
-        telefono: usuario.telefono,
-        estado: nuevoEstado,
-        autor: autorActual
-      })
-    }).then(res => {
+    // Actualización visual inmediata
+    setUsuarios(prev => prev.map(u => u.id_usuario === usuario.id_usuario ? { ...u, estado: nuevoEstado } : u));
+
+    try {
+      const res = await fetch(`${API_URL}/api/usuarios/${usuario.id_usuario}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rol: usuario.rol,
+          nombre: usuario.nombre,
+          apellido: usuario.apellido,
+          telefono: usuario.telefono,
+          estado: nuevoEstado,
+          autor: autorActual
+        })
+      });
       if (res.ok) {
-        cargarDatos();
+        await cargarDatos();
         notificar(`${usuario.nombre} ahora está ${nuevoEstado ? 'Activo' : 'Inactivo'}`);
+      } else {
+        await cargarDatos();
+        notificar('No se pudo cambiar el estado', 'error');
       }
-    });
+    } catch {
+      await cargarDatos();
+      notificar('Error de conexión', 'error');
+    }
   };
 
-  const guardarUsuario = (e) => {
+  const guardarUsuario = async (e) => {
     e.preventDefault();
+    if (guardandoUsuario) return;
+    setGuardandoUsuario(true);
+
     const url = editandoId ? `${API_URL}/api/usuarios/${editandoId}` : `${API_URL}/api/usuarios`;
     const method = editandoId ? 'PUT' : 'POST';
 
-    fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...formUsuario, autor: autorActual })
-    }).then(res => {
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...formUsuario, autor: autorActual })
+      });
+      const data = await res.json().catch(() => ({}));
+
       if (res.ok) {
+        if (editandoId) {
+          setUsuarios(prev => prev.map(u => u.id_usuario === editandoId ? { ...u, ...data } : u));
+        } else if (data && data.id_usuario) {
+          setUsuarios(prev => [data, ...prev]);
+        }
         setFormUsuario({ rol: 'Alumno', nombre: '', apellido: '', telefono: '', estado: true, password: '' });
         setEditandoId(null);
-        cargarDatos();
+        await cargarDatos();
         notificar(editandoId ? 'Usuario actualizado con éxito' : 'Usuario registrado con éxito');
+      } else {
+        notificar(data.error || 'Error al guardar usuario', 'error');
       }
-    });
+    } catch {
+      notificar('Error de conexión al guardar usuario', 'error');
+    } finally {
+      setGuardandoUsuario(false);
+    }
   };
 
   const eliminarUsuario = async (id, nombre) => {
@@ -546,7 +610,8 @@ function App() {
       const res = await fetch(`${API_URL}/api/usuarios/${id}?autor=${encodeURIComponent(autorActual)}`, { method: 'DELETE' });
       const respuesta = await res.json().catch(() => ({}));
       if (res.ok) {
-        cargarDatos();
+        setUsuarios(prev => prev.filter(u => u.id_usuario !== id));
+        await cargarDatos();
         notificar('Usuario eliminado correctamente');
       } else {
         notificar(respuesta.error || 'Error al eliminar usuario', 'error');
@@ -558,10 +623,14 @@ function App() {
 
   const guardarHorario = async (e) => {
     e.preventDefault();
+    if (guardandoHorario) return;
+
     if (!formHorario.fecha) {
       notificar('Selecciona una fecha en el calendario', 'error');
       return;
     }
+
+    setGuardandoHorario(true);
     const bloque = BLOQUES_HORARIOS[formHorario.bloqueIndex];
 
     try {
@@ -579,38 +648,61 @@ function App() {
         })
       });
 
-      const respuesta = await res.json();
+      const respuesta = await res.json().catch(() => ({}));
       if (res.ok) {
+        const profeObj = profesores.find(p => String(p.id_usuario) === String(formHorario.id_profesor));
+        const horarioNuevo = {
+          ...respuesta,
+          fecha: respuesta.fecha ? String(respuesta.fecha).split('T')[0] : formHorario.fecha,
+          estado: respuesta.estado || 'Disponible',
+          profesor_nombre: respuesta.profesor_nombre || profeObj?.nombre || '',
+          profesor_apellido: respuesta.profesor_apellido || profeObj?.apellido || ''
+        };
+
+        // Insertar inmediatamente en la tabla en vivo y limpiar filtros que puedan ocultarlo
+        setHorarios(prev => [...prev, horarioNuevo]);
+        setFiltroEstadoHorario('todos');
+        setFiltroPeriodoHorario('todos');
         setFormHorario({ id_profesor: '', modalidad: 'Individual', capacidad_max: 1, fecha: '', bloqueIndex: 0 });
-        cargarDatos();
+
+        await cargarDatos();
         notificar('Clase publicada con éxito');
       } else {
         notificar(respuesta.error || 'No se pudo registrar la clase', 'error');
       }
     } catch {
       notificar('Error al programar la clase', 'error');
+    } finally {
+      setGuardandoHorario(false);
     }
   };
 
   const eliminarHorario = async (id) => {
     if (!window.confirm('¿Deseas eliminar esta clase del calendario? Se liberarán las reservas asociadas.')) return;
     try {
+      setHorarios(prev => prev.filter(h => h.id_horario !== id));
       const res = await fetch(`${API_URL}/api/horarios/${id}?autor=${encodeURIComponent(autorActual)}`, { method: 'DELETE' });
       if (res.ok) {
-        cargarDatos();
+        await cargarDatos();
         notificar('Clase eliminada del calendario');
+      } else {
+        await cargarDatos();
+        notificar('No se pudo eliminar la clase', 'error');
       }
     } catch {
+      await cargarDatos();
       notificar('Error al eliminar clase', 'error');
     }
   };
 
   const confirmarInscripcionDirecta = async () => {
+    if (guardandoInscripcion) return;
     if (!modalInscribir.id_alumno) {
       notificar('Selecciona a un alumno para inscribir', 'error');
       return;
     }
 
+    setGuardandoInscripcion(true);
     try {
       const res = await fetch(`${API_URL}/api/reservas`, {
         method: 'POST',
@@ -622,19 +714,20 @@ function App() {
         })
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         const alumno = usuarios.find(u => String(u.id_usuario) === String(modalInscribir.id_alumno));
         const c = modalInscribir.clase;
         setModalInscribir({ visible: false, clase: null, id_alumno: '' });
-        cargarDatos();
-        notificar(`¡${alumno.nombre} inscrito correctamente!`);
+        await cargarDatos();
+        notificar(`¡${alumno?.nombre || 'Alumno'} inscrito correctamente!`);
 
-        const nombreProfesorCompleto = c.profesor_nombre
-          ? `${c.profesor_nombre} ${c.profesor_apellido || ''}`.trim()
-          : 'Profesor Asignado';
+        if (alumno) {
+          const nombreProfesorCompleto = c.profesor_nombre
+            ? `${c.profesor_nombre} ${c.profesor_apellido || ''}`.trim()
+            : 'Profesor Asignado';
 
-        const mensajeWsp = 
+          const mensajeWsp = 
 `¡Hola, ${alumno.nombre}!
 
 Tu clase de marinera ha sido agendada con éxito:
@@ -648,22 +741,28 @@ Tu clase de marinera ha sido agendada con éxito:
 
 ¡Nos vemos en clase! 💃`;
 
-        abrirWhatsApp(alumno.telefono, mensajeWsp);
+          abrirWhatsApp(alumno.telefono, mensajeWsp);
+        }
       } else {
         notificar(data.error || 'No se pudo inscribir al alumno', 'error');
       }
     } catch {
       notificar('Error de red al procesar la inscripción', 'error');
+    } finally {
+      setGuardandoInscripcion(false);
     }
   };
 
   const registrarNuevoPago = async (e) => {
     e.preventDefault();
+    if (guardandoPago) return;
+
     if (!modalPago.id_alumno) {
       notificar('Selecciona al alumno que realizó el pago', 'error');
       return;
     }
 
+    setGuardandoPago(true);
     try {
       const res = await fetch(`${API_URL}/api/pagos`, {
         method: 'POST',
@@ -678,69 +777,101 @@ Tu clase de marinera ha sido agendada con éxito:
         })
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        // Actualizar la lista de pagos en pantalla al instante sin duplicar si ya existía
+        if (data && data.id_pago) {
+          setPagos(prev => {
+            const yaEsta = prev.some(p => p.id_pago === data.id_pago);
+            return yaEsta ? prev : [data, ...prev];
+          });
+        }
         setModalPago({ visible: false, id_alumno: '', metodo: 'Efectivo', monto: '50.00', comprobante: '' });
-        cargarDatos();
+        await cargarDatos();
         notificar('Pago ingresado y registrado con éxito');
       } else {
         notificar(data.error || 'Error al registrar pago', 'error');
       }
     } catch {
       notificar('Error al conectar con el servidor', 'error');
+    } finally {
+      setGuardandoPago(false);
     }
   };
 
-  const actualizarEstadoPago = (idPago, nuevoEstado) => {
-    fetch(`${API_URL}/api/pagos/${idPago}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado: nuevoEstado, autor: autorActual })
-    }).then(res => {
+  const actualizarEstadoPago = async (idPago, nuevoEstado) => {
+    setPagos(prev => prev.map(p => p.id_pago === idPago ? { ...p, estado: nuevoEstado } : p));
+    try {
+      const res = await fetch(`${API_URL}/api/pagos/${idPago}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado: nuevoEstado, autor: autorActual })
+      });
       if (res.ok) {
-        cargarDatos();
+        await cargarDatos();
         notificar(`Pago marcado como ${nuevoEstado}`);
+      } else {
+        await cargarDatos();
+        notificar('Error al actualizar estado del pago', 'error');
       }
-    });
+    } catch {
+      await cargarDatos();
+      notificar('Error de conexión', 'error');
+    }
   };
 
   const eliminarPago = async (idPago) => {
     if (!window.confirm('¿Deseas eliminar este registro de pago del sistema?')) return;
     try {
+      setPagos(prev => prev.filter(p => p.id_pago !== idPago));
       const res = await fetch(`${API_URL}/api/pagos/${idPago}?autor=${encodeURIComponent(autorActual)}`, { method: 'DELETE' });
       if (res.ok) {
-        cargarDatos();
+        await cargarDatos();
         notificar('Registro de pago eliminado correctamente');
       } else {
+        await cargarDatos();
         notificar('No se pudo eliminar el registro', 'error');
       }
     } catch {
+      await cargarDatos();
       notificar('Error de conexión', 'error');
     }
   };
 
-  const actualizarAsistencia = (idReserva, estadoAsistencia) => {
-    fetch(`${API_URL}/api/reservas/${idReserva}/asistencia`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ estado_asistencia: estadoAsistencia, autor: autorActual })
-    }).then(res => {
+  const actualizarAsistencia = async (idReserva, estadoAsistencia) => {
+    setReservas(prev => prev.map(r => r.id_reserva === idReserva ? { ...r, estado_asistencia: estadoAsistencia } : r));
+    try {
+      const res = await fetch(`${API_URL}/api/reservas/${idReserva}/asistencia`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado_asistencia: estadoAsistencia, autor: autorActual })
+      });
       if (res.ok) {
-        cargarDatos();
+        await cargarDatos();
         notificar(`Asistencia registrada: ${estadoAsistencia}`);
+      } else {
+        await cargarDatos();
+        notificar('No se pudo guardar la asistencia', 'error');
       }
-    });
+    } catch {
+      await cargarDatos();
+      notificar('Error de conexión', 'error');
+    }
   };
 
   const eliminarReserva = async (idReserva) => {
     if (!window.confirm('¿Deseas cancelar y eliminar esta reserva?')) return;
     try {
+      setReservas(prev => prev.filter(r => r.id_reserva !== idReserva));
       const res = await fetch(`${API_URL}/api/reservas/${idReserva}?autor=${encodeURIComponent(autorActual)}`, { method: 'DELETE' });
       if (res.ok) {
-        cargarDatos();
+        await cargarDatos();
         notificar('Reserva cancelada y cupo liberado');
+      } else {
+        await cargarDatos();
       }
     } catch {
+      await cargarDatos();
       notificar('Error de conexión', 'error');
     }
   };
@@ -780,7 +911,7 @@ Tu clase de marinera ha sido agendada con éxito:
 
     let coincidePeriodo = true;
     if (filtroPeriodoHorario === 'semana' && h.fecha) {
-      const fClase = new Date(h.fecha + 'T00:00:00');
+      const fClase = new Date(h.fecha.split('T')[0] + 'T00:00:00');
       coincidePeriodo = fClase >= inicioSemana && fClase <= finSemana;
     } else if (filtroPeriodoHorario === 'mes' && h.fecha) {
       coincidePeriodo = h.fecha.startsWith(mesActualStr);
@@ -1039,7 +1170,6 @@ Tu clase de marinera ha sido agendada con éxito:
         boxSizing: 'border-box'
       }}>
         <div>
-          {/* Cabecera del Sidebar con botón de colapso */}
           <div style={{
             display: 'flex',
             flexDirection: sidebarColapsado ? 'column' : 'row',
@@ -1071,7 +1201,6 @@ Tu clase de marinera ha sido agendada con éxito:
               </div>
             )}
 
-            {/* BOTÓN COLAPSAR / EXPANDIR SIDEBAR */}
             <button
               type="button"
               onClick={alternarSidebar}
@@ -1096,7 +1225,6 @@ Tu clase de marinera ha sido agendada con éxito:
             </button>
           </div>
 
-          {/* Menú de Navegación */}
           <nav style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             {[
               { id: 'horarios', label: enModoProfesor ? 'Mis Clases Asignadas' : 'Calendario de Clases', icon: '📅', visible: true },
@@ -1109,7 +1237,7 @@ Tu clase de marinera ha sido agendada con éxito:
               return (
                 <button
                   key={item.id}
-                  onClick={() => { setTabActual(item.id); setBusqueda(''); }}
+                  onClick={() => cambiarTab(item.id)}
                   title={sidebarColapsado ? item.label : ''}
                   style={{
                     display: 'flex',
@@ -1137,7 +1265,6 @@ Tu clase de marinera ha sido agendada con éxito:
           </nav>
         </div>
 
-        {/* Estado del Servidor */}
         <div style={{
           backgroundColor: '#1e293b',
           padding: sidebarColapsado ? '12px 6px' : '14px',
@@ -1191,7 +1318,7 @@ Tu clase de marinera ha sido agendada con éxito:
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             {esAdminReal && (
               <div style={{
                 display: 'inline-flex',
@@ -1249,7 +1376,7 @@ Tu clase de marinera ha sido agendada con éxito:
                 onChange={(e) => setBusqueda(e.target.value)}
                 style={{
                   ...inputStyle,
-                  width: '210px',
+                  width: '195px',
                   paddingLeft: '34px',
                   backgroundColor: '#f8fafc',
                   border: '1px solid #cbd5e1'
@@ -1257,6 +1384,31 @@ Tu clase de marinera ha sido agendada con éxito:
               />
               <span style={{ position: 'absolute', left: '12px', top: '11px', fontSize: '13px', color: '#94a3b8' }}>🔍</span>
             </div>
+
+            {/* BOTÓN DE SINCRONIZACIÓN RÁPIDA (Evita tener que salir de la cuenta en iPad) */}
+            <button
+              type="button"
+              onClick={() => {
+                cargarDatos(true);
+                notificar('Datos sincronizados al instante');
+              }}
+              title="Actualizar datos en vivo"
+              style={{
+                backgroundColor: '#e0f2fe',
+                color: '#0284c7',
+                border: '1px solid #bae6fd',
+                borderRadius: '8px',
+                padding: '8px 12px',
+                fontSize: '12px',
+                fontWeight: '800',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+            >
+              <span>🔄</span> {sincronizando ? 'Actualizando...' : 'Actualizar'}
+            </button>
 
             {/* PERFIL */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '6px 12px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}>
@@ -1427,19 +1579,23 @@ Tu clase de marinera ha sido agendada con éxito:
                     </div>
 
                     <div>
-                      <button type="submit" style={{
-                        width: '100%',
-                        padding: '11px',
-                        backgroundColor: '#0284c7',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: '10px',
-                        cursor: 'pointer',
-                        fontWeight: '800',
-                        fontSize: '13px',
-                        height: '42px'
-                      }}>
-                        Publicar Turno
+                      <button
+                        type="submit"
+                        disabled={guardandoHorario}
+                        style={{
+                          width: '100%',
+                          padding: '11px',
+                          backgroundColor: guardandoHorario ? '#94a3b8' : '#0284c7',
+                          color: '#ffffff',
+                          border: 'none',
+                          borderRadius: '10px',
+                          cursor: guardandoHorario ? 'wait' : 'pointer',
+                          fontWeight: '800',
+                          fontSize: '13px',
+                          height: '42px'
+                        }}
+                      >
+                        {guardandoHorario ? 'Publicando...' : 'Publicar Turno'}
                       </button>
                     </div>
                   </form>
@@ -1506,7 +1662,7 @@ Tu clase de marinera ha sido agendada con éxito:
                     </div>
                   </div>
 
-                  <span style={{ fontSize: '12px', color: '#64748b' }}>Sincronización en vivo</span>
+                  <span style={{ fontSize: '12px', color: '#16a34a', fontWeight: '700' }}>● Sincronización activa</span>
                 </div>
 
                 <div style={{ overflowX: 'auto' }}>
@@ -1534,7 +1690,7 @@ Tu clase de marinera ha sido agendada con éxito:
                               {formatearFechaTabla(h.fecha)}
                             </td>
                             <td style={{ padding: '14px 22px', fontWeight: '700', color: '#0284c7' }}>
-                              {h.hora_inicio.slice(0, 5)} - {h.hora_fin.slice(0, 5)}
+                              {h.hora_inicio?.slice(0, 5)} - {h.hora_fin?.slice(0, 5)}
                             </td>
                             <td style={{ padding: '14px 22px' }}>
                               <span style={{ 
@@ -1861,8 +2017,22 @@ Te recordamos tu ensayo de marinera programado para hoy:
                     </div>
                   )}
 
-                  <button type="submit" style={{ padding: '12px', backgroundColor: editandoId ? '#16a34a' : '#0284c7', color: '#ffffff', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '800', fontSize: '13px', marginTop: '6px' }}>
-                    {editandoId ? 'Actualizar Datos' : 'Guardar en Sistema'}
+                  <button
+                    type="submit"
+                    disabled={guardandoUsuario}
+                    style={{
+                      padding: '12px',
+                      backgroundColor: guardandoUsuario ? '#94a3b8' : (editandoId ? '#16a34a' : '#0284c7'),
+                      color: '#ffffff',
+                      border: 'none',
+                      borderRadius: '10px',
+                      cursor: guardandoUsuario ? 'wait' : 'pointer',
+                      fontWeight: '800',
+                      fontSize: '13px',
+                      marginTop: '6px'
+                    }}
+                  >
+                    {guardandoUsuario ? 'Guardando...' : (editandoId ? 'Actualizar Datos' : 'Guardar en Sistema')}
                   </button>
                   {editandoId && (
                     <button type="button" onClick={() => { setEditandoId(null); setFormUsuario({ rol: 'Alumno', nombre: '', apellido: '', telefono: '', estado: true, password: '' }); }} style={{ padding: '10px', backgroundColor: '#f1f5f9', color: '#64748b', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: '700', fontSize: '13px' }}>
@@ -2460,10 +2630,20 @@ Te confirmamos la recepción de tu pago:
                 Cancelar
               </button>
               <button
+                disabled={guardandoInscripcion}
                 onClick={confirmarInscripcionDirecta}
-                style={{ flex: 1.6, padding: '11px', backgroundColor: '#0284c7', border: 'none', borderRadius: '8px', fontWeight: '800', color: '#ffffff', cursor: 'pointer' }}
+                style={{
+                  flex: 1.6,
+                  padding: '11px',
+                  backgroundColor: guardandoInscripcion ? '#94a3b8' : '#0284c7',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontWeight: '800',
+                  color: '#ffffff',
+                  cursor: guardandoInscripcion ? 'wait' : 'pointer'
+                }}
               >
-                Inscribir y Notificar 📲
+                {guardandoInscripcion ? 'Inscribiendo...' : 'Inscribir y Notificar 📲'}
               </button>
             </div>
           </div>
@@ -2551,6 +2731,7 @@ Te confirmamos la recepción de tu pago:
               <div style={{ display: 'flex', gap: '10px', marginTop: '14px' }}>
                 <button
                   type="button"
+                  disabled={guardandoPago}
                   onClick={() => setModalPago({ ...modalPago, visible: false })}
                   style={{ flex: 1, padding: '11px', backgroundColor: '#f1f5f9', border: 'none', borderRadius: '8px', fontWeight: '700', color: '#64748b', cursor: 'pointer' }}
                 >
@@ -2558,9 +2739,19 @@ Te confirmamos la recepción de tu pago:
                 </button>
                 <button
                   type="submit"
-                  style={{ flex: 1.5, padding: '11px', backgroundColor: '#16a34a', border: 'none', borderRadius: '8px', fontWeight: '800', color: '#ffffff', cursor: 'pointer' }}
+                  disabled={guardandoPago}
+                  style={{
+                    flex: 1.5,
+                    padding: '11px',
+                    backgroundColor: guardandoPago ? '#94a3b8' : '#16a34a',
+                    border: 'none',
+                    borderRadius: '8px',
+                    fontWeight: '800',
+                    color: '#ffffff',
+                    cursor: guardandoPago ? 'wait' : 'pointer'
+                  }}
                 >
-                  Guardar Pago
+                  {guardandoPago ? 'Guardando...' : 'Guardar Pago'}
                 </button>
               </div>
             </form>

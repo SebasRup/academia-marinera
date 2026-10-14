@@ -9,11 +9,22 @@ app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
+// Evitar que Safari / iPadOS guarde en caché las respuestas de la API
+app.use((req, res, next) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    next();
+});
+
 const pool = new Pool(
     process.env.DATABASE_URL
         ? {
             connectionString: process.env.DATABASE_URL,
-            ssl: { rejectUnauthorized: false }
+            ssl: { rejectUnauthorized: false },
+            max: 15,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000
         }
         : {
             user: process.env.DB_USER,
@@ -41,6 +52,7 @@ pool.connect()
         try {
             await client.query("ALTER TABLE pagos ALTER COLUMN comprobante_url TYPE TEXT;");
             await client.query("ALTER TABLE pagos DROP CONSTRAINT IF EXISTS pagos_metodo_check;");
+            await client.query("ALTER TABLE pagos DROP CONSTRAINT IF EXISTS pagos_id_reserva_key;");
             await client.query("ALTER TABLE pagos ALTER COLUMN metodo TYPE VARCHAR(50) USING metodo::text;");
             await client.query("ALTER TYPE estado_turno ADD VALUE IF NOT EXISTS 'Ocupado';");
             await client.query("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS password VARCHAR(255) DEFAULT '123456';");
@@ -55,18 +67,7 @@ pool.connect()
                     fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             `);
-
-            await client.query(`
-                UPDATE pagos p
-                SET id_reserva = (
-                    SELECT r.id_reserva 
-                    FROM reservas r 
-                    WHERE r.id_alumno = p.id_alumno 
-                    ORDER BY r.fecha_reserva DESC 
-                    LIMIT 1
-                )
-                WHERE p.id_reserva IS NULL;
-            `);
+            await client.query("ALTER TABLE auditoria ADD COLUMN IF NOT EXISTS fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP;");
         } catch (e) {
             console.log("Aviso en migraciones:", e.message);
         }
@@ -148,9 +149,9 @@ app.get('/api/auditoria', async (req, res) => {
                 usuario_nombre,
                 accion,
                 detalle,
-                TO_CHAR(fecha_creacion, 'YYYY-MM-DD HH24:MI:SS') AS fecha
+                TO_CHAR(COALESCE(fecha_creacion, CURRENT_TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS') AS fecha
              FROM auditoria 
-             ORDER BY fecha_creacion DESC 
+             ORDER BY id_auditoria DESC 
              LIMIT 150`
         );
         res.json(resultado.rows);
@@ -159,7 +160,6 @@ app.get('/api/auditoria', async (req, res) => {
     }
 });
 
-// VACIAR TODA LA BITÁCORA DE AUDITORÍA
 app.delete('/api/auditoria/todos', async (req, res) => {
     try {
         const autor = req.query.autor || 'Administrador';
@@ -176,7 +176,7 @@ app.delete('/api/auditoria/todos', async (req, res) => {
 // ==========================================
 app.get('/api/usuarios', async (req, res) => {
     try {
-        const todos = await pool.query("SELECT id_usuario, rol, nombre, apellido, telefono, estado, fecha_registro FROM usuarios ORDER BY fecha_registro DESC");
+        const todos = await pool.query("SELECT id_usuario, rol, nombre, apellido, telefono, estado, fecha_registro FROM usuarios ORDER BY id_usuario DESC");
         res.json(todos.rows);
     } catch (err) {
         res.status(500).json({ error: "Error al obtener usuarios" });
@@ -188,8 +188,8 @@ app.post('/api/usuarios', async (req, res) => {
         const { rol, nombre, apellido, telefono, password, autor } = req.body;
         const clave = password || '123456';
         const nuevo = await pool.query(
-            "INSERT INTO usuarios (rol, nombre, apellido, telefono, password) VALUES ($1, $2, $3, $4, $5) RETURNING id_usuario, rol, nombre, apellido, telefono, estado",
-            [rol, nombre, apellido, telefono, clave]
+            "INSERT INTO usuarios (rol, nombre, apellido, telefono, password, estado) VALUES ($1, $2, $3, $4, $5, true) RETURNING id_usuario, rol, nombre, apellido, telefono, estado",
+            [rol, nombre.trim(), apellido.trim(), telefono.trim(), clave]
         );
         
         await registrarAuditoria(
@@ -200,7 +200,7 @@ app.post('/api/usuarios', async (req, res) => {
 
         res.json(nuevo.rows[0]);
     } catch (err) {
-        res.status(500).json({ error: "Error interno al crear usuario" });
+        res.status(500).json({ error: "Error al crear usuario (verifica que el celular no esté duplicado)" });
     }
 });
 
@@ -228,7 +228,7 @@ app.put('/api/usuarios/:id', async (req, res) => {
 
         res.json(actualizado.rows[0]);
     } catch (err) {
-        res.status(500).json({ error: "Error interno al actualizar" });
+        res.status(500).json({ error: "Error interno al actualizar usuario" });
     }
 });
 
@@ -279,7 +279,7 @@ app.get('/api/horarios', async (req, res) => {
                 TO_CHAR(h.fecha, 'YYYY-MM-DD') AS fecha,
                 h.hora_inicio,
                 h.hora_fin,
-                h.estado,
+                COALESCE(h.estado::text, 'Disponible') AS estado,
                 u.nombre AS profesor_nombre,
                 u.apellido AS profesor_apellido
             FROM horarios h
@@ -305,9 +305,33 @@ app.post('/api/horarios', async (req, res) => {
         if (cruce.rows.length > 0) {
             return res.status(400).json({ error: "Conflicto: El profesor ya tiene clase asignada en este bloque." });
         }
-        const nuevo = await pool.query(
-            "INSERT INTO horarios (id_profesor, modalidad, capacidad_max, fecha, hora_inicio, hora_fin) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+
+        const insertado = await pool.query(
+            `INSERT INTO horarios (id_profesor, modalidad, capacidad_max, fecha, hora_inicio, hora_fin, estado) 
+             VALUES ($1, $2, $3, $4, $5, $6, 'Disponible') 
+             RETURNING id_horario`,
             [id_profesor, modalidad, capacidad_max, fecha, hora_inicio, hora_fin]
+        );
+
+        const idNuevo = insertado.rows[0].id_horario;
+
+        // Devolver el horario completo con el nombre del profesor para actualización instantánea en pantalla
+        const completo = await pool.query(
+            `SELECT 
+                h.id_horario,
+                h.id_profesor,
+                h.modalidad,
+                h.capacidad_max,
+                TO_CHAR(h.fecha, 'YYYY-MM-DD') AS fecha,
+                h.hora_inicio,
+                h.hora_fin,
+                COALESCE(h.estado::text, 'Disponible') AS estado,
+                u.nombre AS profesor_nombre,
+                u.apellido AS profesor_apellido
+             FROM horarios h
+             LEFT JOIN usuarios u ON h.id_profesor = u.id_usuario
+             WHERE h.id_horario = $1`,
+            [idNuevo]
         );
 
         await registrarAuditoria(
@@ -316,8 +340,9 @@ app.post('/api/horarios', async (req, res) => {
             `Publicó turno ${modalidad} para el ${fecha} de ${hora_inicio.slice(0,5)} a ${hora_fin.slice(0,5)}`
         );
 
-        res.json(nuevo.rows[0]);
+        res.json(completo.rows[0]);
     } catch (err) {
+        console.error("Error al crear horario:", err.message);
         res.status(500).json({ error: "Error al registrar clase" });
     }
 });
@@ -367,7 +392,7 @@ app.delete('/api/horarios/:id', async (req, res) => {
 });
 
 // ==========================================
-// 4. PAGOS
+// 4. PAGOS (CON PROTECCIÓN ANTI-DUPLICADOS)
 // ==========================================
 app.get('/api/pagos', async (req, res) => {
     try {
@@ -386,7 +411,7 @@ app.get('/api/pagos', async (req, res) => {
                 COALESCE(u.telefono, 'Sin teléfono') AS alumno_telefono
             FROM pagos p
             LEFT JOIN usuarios u ON p.id_alumno = u.id_usuario
-            ORDER BY p.fecha_pago DESC
+            ORDER BY p.id_pago DESC
         `;
         const pagos = await pool.query(consulta);
         res.json(pagos.rows);
@@ -398,43 +423,114 @@ app.get('/api/pagos', async (req, res) => {
 app.post('/api/pagos', async (req, res) => {
     try {
         const { id_alumno, id_reserva, monto, metodo, comprobante_url, estado, autor } = req.body;
+
+        if (!id_alumno) {
+            return res.status(400).json({ error: "Debes seleccionar un alumno válido." });
+        }
+
+        const montoNum = parseFloat(monto);
+        if (isNaN(montoNum) || montoNum <= 0) {
+            return res.status(400).json({ error: "Ingresa un monto válido mayor a 0." });
+        }
+
         const estadoFinal = estado || 'Pendiente';
-        const comprobanteFinal = comprobante_url || (metodo === 'Efectivo' ? 'Pago presencial en counter' : 'Comprobante Digital');
-        
+        const metodoFinal = String(metodo || 'Efectivo');
+        const comprobanteFinal = comprobante_url || (metodoFinal === 'Efectivo' ? 'Pago presencial en counter' : 'Comprobante Digital');
+
+        // 1. CANDADO ANTI-DUPLICADOS: Evita que un doble toque en el iPad duplique el mismo pago en un lapso de 45 segundos
+        const pagoReciente = await pool.query(
+            `SELECT p.id_pago
+             FROM pagos p
+             WHERE p.id_alumno = $1
+               AND p.monto = $2
+               AND p.metodo = $3
+               AND p.fecha_pago >= NOW() - INTERVAL '45 seconds'
+             ORDER BY p.id_pago DESC
+             LIMIT 1`,
+            [id_alumno, montoNum, metodoFinal]
+        );
+
+        if (pagoReciente.rows.length > 0) {
+            const idExistente = pagoReciente.rows[0].id_pago;
+            const pagoCompletoExistente = await pool.query(
+                `SELECT 
+                    p.id_pago, p.id_alumno, p.id_reserva, p.monto, p.metodo, p.comprobante_url, p.estado,
+                    TO_CHAR(p.fecha_pago, 'YYYY-MM-DD HH24:MI') AS fecha_pago,
+                    COALESCE(u.nombre, 'Alumno') AS alumno_nombre,
+                    COALESCE(u.apellido, 'Registrado') AS alumno_apellido,
+                    COALESCE(u.telefono, 'Sin teléfono') AS alumno_telefono
+                 FROM pagos p
+                 LEFT JOIN usuarios u ON p.id_alumno = u.id_usuario
+                 WHERE p.id_pago = $1`,
+                [idExistente]
+            );
+            return res.json(pagoCompletoExistente.rows[0]);
+        }
+
+        // 2. Búsqueda segura de reserva asociada (aislada para no fallar nunca)
         let idReservaFinal = id_reserva && !isNaN(Number(id_reserva)) ? Number(id_reserva) : null;
-
         if (!idReservaFinal) {
-            const buscarRes = await pool.query(`
-                SELECT r.id_reserva 
-                FROM reservas r 
-                LEFT JOIN pagos p ON r.id_reserva = p.id_reserva
-                WHERE r.id_alumno = $1 AND r.activa = true AND p.id_pago IS NULL
-                ORDER BY r.fecha_reserva ASC 
-                LIMIT 1
-            `, [id_alumno]);
+            try {
+                const buscarRes = await pool.query(`
+                    SELECT r.id_reserva 
+                    FROM reservas r 
+                    LEFT JOIN pagos p ON r.id_reserva = p.id_reserva
+                    WHERE r.id_alumno = $1 AND r.activa = true AND p.id_pago IS NULL
+                    ORDER BY r.id_reserva ASC 
+                    LIMIT 1
+                `, [id_alumno]);
 
-            if (buscarRes.rows.length > 0) {
-                idReservaFinal = buscarRes.rows[0].id_reserva;
+                if (buscarRes.rows.length > 0) {
+                    idReservaFinal = buscarRes.rows[0].id_reserva;
+                }
+            } catch (eRes) {
+                idReservaFinal = null;
             }
         }
 
-        const nuevoPago = await pool.query(
-            "INSERT INTO pagos (id_alumno, id_reserva, monto, metodo, comprobante_url, estado) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-            [id_alumno, idReservaFinal, parseFloat(monto || 0), String(metodo), comprobanteFinal, estadoFinal]
+        // 3. Inserción segura (con respaldo automático si id_reserva tuviera conflicto)
+        let insertado;
+        try {
+            insertado = await pool.query(
+                "INSERT INTO pagos (id_alumno, id_reserva, monto, metodo, comprobante_url, estado) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id_pago",
+                [id_alumno, idReservaFinal, montoNum, metodoFinal, comprobanteFinal, estadoFinal]
+            );
+        } catch (errInsert) {
+            insertado = await pool.query(
+                "INSERT INTO pagos (id_alumno, id_reserva, monto, metodo, comprobante_url, estado) VALUES ($1, NULL, $2, $3, $4, $5) RETURNING id_pago",
+                [id_alumno, montoNum, metodoFinal, comprobanteFinal, estadoFinal]
+            );
+        }
+
+        const idNuevoPago = insertado.rows[0].id_pago;
+
+        // 4. Obtener el pago enriquecido para devolverlo al frontend de inmediato
+        const pagoCompleto = await pool.query(
+            `SELECT 
+                p.id_pago, p.id_alumno, p.id_reserva, p.monto, p.metodo, p.comprobante_url, p.estado,
+                TO_CHAR(p.fecha_pago, 'YYYY-MM-DD HH24:MI') AS fecha_pago,
+                COALESCE(u.nombre, 'Alumno') AS alumno_nombre,
+                COALESCE(u.apellido, 'Registrado') AS alumno_apellido,
+                COALESCE(u.telefono, 'Sin teléfono') AS alumno_telefono
+             FROM pagos p
+             LEFT JOIN usuarios u ON p.id_alumno = u.id_usuario
+             WHERE p.id_pago = $1`,
+            [idNuevoPago]
         );
 
-        const aInfo = await pool.query("SELECT nombre, apellido FROM usuarios WHERE id_usuario = $1", [id_alumno]);
-        const nombreAlum = aInfo.rows.length > 0 ? `${aInfo.rows[0].nombre} ${aInfo.rows[0].apellido}` : 'Alumno';
+        const filaPago = pagoCompleto.rows[0];
+        const nombreAlum = `${filaPago.alumno_nombre} ${filaPago.alumno_apellido}`;
 
         await registrarAuditoria(
             autor || nombreAlum,
             'Registrar Pago',
-            `Abonó S/ ${parseFloat(monto || 0).toFixed(2)} por ${metodo} (Estado: ${estadoFinal})`
+            `Abonó S/ ${montoNum.toFixed(2)} por ${metodoFinal} a nombre de ${nombreAlum} (${estadoFinal})`
         );
 
-        res.json(nuevoPago.rows[0]);
+        res.json(filaPago);
     } catch (err) {
-        res.status(500).json({ error: `Error en BD: ${err.message}` });
+        console.error("Error en POST /api/pagos:", err.message);
+        res.status(500).json({ error: `No se pudo guardar el pago: ${err.message}` });
     }
 });
 
@@ -446,6 +542,10 @@ app.put('/api/pagos/:id', async (req, res) => {
             "UPDATE pagos SET estado = $1 WHERE id_pago = $2 RETURNING *",
             [estado, id]
         );
+
+        if (actualizado.rows.length === 0) {
+            return res.status(404).json({ error: "Pago no encontrado" });
+        }
 
         const p = actualizado.rows[0];
         const aInfo = await pool.query("SELECT nombre, apellido FROM usuarios WHERE id_usuario = $1", [p.id_alumno]);
@@ -463,7 +563,6 @@ app.put('/api/pagos/:id', async (req, res) => {
     }
 });
 
-// VACIAR TODO EL HISTORIAL DE PAGOS (CIERRE DE MES)
 app.delete('/api/pagos/todos', async (req, res) => {
     try {
         const autor = req.query.autor || 'Administrador';
@@ -575,7 +674,7 @@ app.post('/api/reservas', async (req, res) => {
         );
         if (yaInscrito.rows.length > 0) {
             await client.query('ROLLBACK');
-            return res.status(400).json({ error: "Ya te encuentras registrado en esta clase." });
+            return res.status(400).json({ error: "El alumno ya se encuentra registrado en esta clase." });
         }
 
         const horarioQuery = await client.query(

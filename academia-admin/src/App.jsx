@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 
-const API_URL = 'https://academia-marinera.onrender.com';
+const API_URL = import.meta.env.VITE_API_URL || 'https://academia-marinera.onrender.com';
 
 const BLOQUES_HORARIOS = (() => {
   const bloques = [];
